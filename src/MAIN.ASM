@@ -43,7 +43,6 @@ DMAX DATA 55H;月份天数溢出量
 
 PWORD DATA 20H  ;进程状态字（PROCESS STATUS WORD）
 PMODE BIT 20H.0 ;工作模式位（0:normal, 1:setting)
-LEAP BIT 20H.1  ;闰年标志位（leap year bit）
 FLASH BIT 20H.3 ;闪烁控制位（flash bit)
 TOGGLE BIT 20H.4;12h/24h切换标志位
 BF BIT 20H.5;是否在设置(BUZY FALG)
@@ -70,6 +69,7 @@ CSEG AT 0030H
 MAIN:
 LCALL STARTUP;调用初始化
 LOOP:
+MOV PROCESS, #02H
 LCALL CZ;调用拆字
 LCALL DISP;调用显示
 LCALL SCAN_KEY4X4;调用按键扫描获取键值
@@ -106,15 +106,15 @@ STARTUP:
     MOV DMAX, #31H;对应月份最大天数
 
     ;初始化进程
-    MOV PWORD, #00H;默认normal模式,不闪烁,非闰年
+    MOV PWORD, #00H;默认|normal模式|flash:false|toggle :false|bf:falsh|
     MOV PROCESS, #02H;默认日期进程
     MOV COUNT3, #00H;计数器清零
     MOV COUNT5, #00H;计数器清零
     MOV CURSOR, #01H;对应第一段数码管
 
 
-    CLR P1.0;闹钟默认打开
-    MOV AWORD, #01H;ARUN:1 AF:0 TOGGLE:0 BF:0
+    SETB P1.0;闹钟默认关闭
+    MOV AWORD, #00H;默认|arun:false|af:false|
     ;初始化显存
     MOV 30H, #00H
     MOV 31H, #01H
@@ -210,23 +210,23 @@ CZRET:RET
 CZ1:
     ;格式化拆字
     MOV R1, #60H;指向时间进程第一个待拆字
-    MOV R0, #30H;指向第一段数码管
+    MOV R0, #30H;指向第一块显存
     CZ1LOOP1:
-        MOV A, @R1;取待拆字节 
+        MOV A, @R1;取待拆字 
         ANL A, #0FH ;拆低位
-        MOV @R0, A ;存储
+        MOV @R0, A ;写入显存
         INC R0 ;指向下一个缓存单元
 
         MOV A, @R1;取待拆字节
         SWAP A 
         ANL A, #0FH;拆高位 
-        MOV @R0, A ;存储
+        MOV @R0, A ;写入显存
         INC R0 ;指向下一个缓存单元
-        MOV @R0, #10H;存放‘-’
+        MOV @R0, #10H;写入‘-’
         INC R0  ;指向下一个缓存单元
         INC R1 ;指向下一个待拆字节
         MOV A, R1
-    CJNE A, #64H, CZ1LOOP1;判断是否已经拆完最后一个字节,如果是结束流程,否则继续拆下一个字
+    CJNE A, #64H, CZ1LOOP1;如果还没拆完最后一个待拆字,拆下一个字
    
     ;12h/24h切换
     JB PMODE, CZ1RET;如果当前是normal mode则继续
@@ -1303,6 +1303,17 @@ MANAGE_RECOVER:
                 INC COUNT7
                 MOV A, COUNT7 
             CJNE A, #10, MRRET
+                ;日期错误处理
+                JNB PROCESS.1, MRL1
+                    LCALL GET_DMAX;获取Dmax
+                    ;天数调整
+                    MOV A, DAY
+                    SETB C 
+                    SUBB A, DMAX 
+                    JC MRL1 ;如果天数超过最大天数
+                        MOV DAY, DMAX 
+                MRL1:
+                
                 MOV COUNT7, #00H 
                 CLR PMODE;return TO normal mode
     MRRET:CLR BF
@@ -1373,13 +1384,14 @@ TIMER0:
     MOV COUNT2, #00H;计数器2清零
 
     LCALL ADJUST_TIME;时间调整
-    
+    LJMP TEST
     MOV A, SEC
     CJNE A, #00H, NOT_NEWDAY; (NOT NEW DAY)
     MOV A, MIN 
     CJNE A, #00H, NOT_NEWDAY 
     MOV A, HOU 
     CJNE A, #00H, NOT_NEWDAY
+        TEST:
         LCALL ADJUST_DATE; 当时分秒为00:00:00时为新的一天
     NOT_NEWDAY:
 
@@ -1425,38 +1437,35 @@ GET_DMAX:
     MOVC A, @A+DPTR;读天数溢出值
     MOV DMAX, A;存天数溢出值
 
-    ;低位年分压缩bcd码解压
-    ;算法：高位*10 + 低位
-    MOV A, YEL
-    SWAP A
-    ANL A, #0FH
-    MOV B, #10H
-    MUL AB 
-    MOV B, A 
-    MOV A, YEL 
-    ANL A, #0FH 
-    ADD A, B
-    
-
-    ;判断是否闰年 （判断是否能被4整除）
-    ;算法：低位年分解压的bcd码能别4整除
-    MOV B, #4 
-    DIV AB
-    MOV A, B 
-    CLR LEAP;默认不是闰年
-    CJNE A, #00H, NLEAP;如果余数为0为闰年（not leap year)
-        SETB LEAP;是闰年
-    NLEAP:
 
     ;判断当前月份是否是二月，并对天数进行调整
     MOV A, MON
     CJNE A, #02H, NF;如果是二月则继续(not february)
-        JNB LEAP, NF;如果是闰年则继续
-            ;二月分最大天数加1
+        ;低位年分压缩bcd码解压
+        ;算法：高位*10 + 低位
+        MOV A, YEL
+        SWAP A
+        ANL A, #0FH
+        MOV B, #10H
+        MUL AB 
+        MOV B, A 
+        MOV A, YEL 
+        ANL A, #0FH 
+        ADD A, B
+        
+
+        ;判断是否闰年 （判断是否能被4整除）
+        ;算法：低位年分解压的bcd码能别4整除
+        MOV B, #4 
+        DIV AB
+        MOV A, B 
+        ;CLR LEAP;默认不是闰年
+        CJNE A, #00H, NLEAP;如果余数为0为闰年（not leap year)
             MOV A, DMAX
             ADD A, #01H 
             DA A 
-            MOV DMAX, A
+            MOV DMAX, A 
+        NLEAP:
     NF:
 RET
 
