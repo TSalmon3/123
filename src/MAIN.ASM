@@ -69,7 +69,6 @@ CSEG AT 0030H
 MAIN:
 LCALL STARTUP;调用初始化
 LOOP:
-MOV PROCESS, #02H
 LCALL CZ;调用拆字
 LCALL DISP;调用显示
 LCALL SCAN_KEY4X4;调用按键扫描获取键值
@@ -87,12 +86,12 @@ LJMP LOOP
 ;--------------------------------------------------------------------------------------------------------
 STARTUP:
     ;初始化闹钟
-    MOV A_SEC, #01H
+    MOV A_SEC, #20H
     MOV A_MIN, #58H 
     MOV A_HOU, #23H 
     ;初始化时间
-    MOV SEC, #20H
-    MOV MIN, #59H
+    MOV SEC, #01H
+    MOV MIN, #58H
     MOV HOU, #23H
     MOV COUNT1, #00H
     MOV COUNT2, #00H
@@ -222,12 +221,12 @@ CZ1:
         ANL A, #0FH;拆高位 
         MOV @R0, A ;写入显存
         INC R0 ;指向下一个缓存单元
-        MOV @R0, #10H;写入‘-’
         INC R0  ;指向下一个缓存单元
         INC R1 ;指向下一个待拆字节
         MOV A, R1
     CJNE A, #64H, CZ1LOOP1;如果还没拆完最后一个待拆字,拆下一个字
-   
+    MOV 32H, #10H;送“-”索引
+    MOV 35H, #10H;送“-”索引
     ;12h/24h切换
     JB PMODE, CZ1RET;如果当前是normal mode则继续
         JNB TOGGLE, CZ1RET; 如果当前处于切换状态
@@ -311,11 +310,12 @@ CZ3:
         ANL A, #0FH;拆高位 
         MOV @R0, A 
         INC R0 ;指向下一个缓存单元
-        MOV @R0, #10H
         INC R0  ;指向下一个缓存单元
         INC R1 ;指向下一个待拆字节
         MOV A, R1
     CJNE A, #59H, CZNEQ2;判断是否已经拆完最后一个字节,如果是结束流程,否则继续拆下一个字
+    MOV 32H, #10H;送“-”索引
+    MOV 35H, #10H;送“-”索引
 RET
 ;--------------------------------------------------------------------------------------------------------
 ;功能：处理8x1BUTTONS
@@ -1143,12 +1143,14 @@ UNPRESS:RET
 
     ;功能：处理按键*
     KD:
-    JNB AF, KDNB;如果闹钟响则继续
-        CLR AF ;关闭闹钟标志位
-        LCALL STOP_ALARM;关闭闹钟
-        LJMP KDRET
-    KDNB: 
         JB PMODE, KDNN ;如果是normal mode 则继续
+
+            JNB AF, KDNB;如果闹钟响则继续
+                CLR AF ;关闭闹钟标志位
+                LCALL STOP_ALARM;关闭闹钟
+                SJMP KDRET
+            KDNB:
+
             SETB PMODE;切换到setting mode
             JB PROCESS.2, DDD;如果不是闹钟进程则继续
                 CLR TR0 ;关闭定时器0
